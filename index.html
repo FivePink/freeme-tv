@@ -154,18 +154,11 @@ function playEp(s){
   document.getElementById('nowPlaying').textContent=s.lines[lineIdx].name+' · '+ep.name;
   const video=document.getElementById('video');
   if(hls){hls.destroy();hls=null;}
-  if(video.canPlayType('application/vnd.apple.mpegurl')){
-    video.src=ep.url;
-  }else if(window.Hls&&Hls.isSupported()){
-    hls=new Hls({maxBufferLength:30});
-    hls.loadSource(ep.url);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.ERROR,(_e,d)=>{
-      if(d.fatal){ hls.startLoad?.(); }
-    });
-  }
-  video.currentTime=store.get(s.name+'|'+ep.name)||0;
-  video.play().catch(()=>{});
+
+  const startAt=()=>{
+    video.currentTime=store.get(s.name+'|'+ep.name)||0;
+    video.play().catch(()=>{});
+  };
   video.ontimeupdate=()=>{
     if(video.duration&&video.currentTime<video.duration-3)
       store.save(s.name+'|'+ep.name,video.currentTime);
@@ -173,6 +166,22 @@ function playEp(s){
   video.onended=()=>{
     if(epIdx<s.lines[lineIdx].eps.length-1){epIdx++; playEp(s);}
   };
+
+  // 原生优先：直接设 src（即使 canPlayType 不报告，手机 webview 可能仍可播）
+  let mode='native';
+  video.onloadedmetadata=()=>{ if(mode==='native') startAt(); };
+  video.onerror=()=>{
+    if(mode==='native' && window.Hls && Hls.isSupported()){
+      mode='hls';
+      video.onerror=null;
+      hls=new Hls({maxBufferLength:30});
+      hls.loadSource(ep.url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR,(_e,d)=>{ if(d.fatal) hls.startLoad?.(); });
+      hls.on(Hls.Events.MANIFEST_PARSED,startAt);
+    }
+  };
+  video.src=ep.url;
 }
 
 async function route(){
