@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Freeme 影视</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--panel2:#1f232d;--line:#2a2f3a;--txt:#e8eaed;--sub:#9aa0ac;--accent:#e54848;--accent2:#ff6b6b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.5}
+.wrap{max-width:1100px;margin:0 auto;padding:14px}
+a{color:inherit;text-decoration:none}
+/* 首页 */
+.home-head{font-size:20px;margin:10px 0 16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:14px}
+.card{background:var(--panel);border-radius:10px;overflow:hidden;cursor:pointer}
+.card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:#000}
+.card .cap{padding:8px 10px}
+.card .cap .n{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .cap .r{color:var(--sub);font-size:12px;margin-top:2px}
+/* 播放页 */
+.player-box{position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden}
+.player-box video{width:100%;height:100%;display:block}
+.meta{display:flex;gap:14px;margin:16px 0;flex-wrap:wrap}
+.meta img{width:100px;border-radius:8px;flex-shrink:0}
+.meta h1{font-size:22px;margin-bottom:6px}
+.meta .sub{color:var(--sub);font-size:13px}
+.panel{background:var(--panel);border-radius:10px;padding:14px;margin-bottom:14px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.tab{padding:6px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:16px;font-size:13px;color:var(--sub);cursor:pointer;user-select:none}
+.tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.toolbar button{background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:6px 12px;border-radius:6px;font-size:13px;cursor:pointer}
+.toolbar button:hover{border-color:var(--accent2)}
+.toolbar .hint{color:var(--sub);font-size:12px}
+.eps{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:8px;max-height:280px;overflow-y:auto}
+.ep{padding:8px 4px;text-align:center;background:var(--panel2);border:1px solid var(--line);border-radius:7px;font-size:13px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ep:hover{border-color:var(--accent2)}
+.ep.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.back{color:var(--sub);font-size:14px;margin-bottom:12px;display:inline-block}
+.empty{color:var(--sub);text-align:center;padding:60px 0}
+@media(max-width:600px){.wrap{padding:8px}.grid{grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:10px}.meta img{width:72px}.meta h1{font-size:18px}.eps{grid-template-columns:repeat(auto-fill,minmax(60px,1fr));max-height:240px}}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script>
+let DATA=null, lineIdx=0, epIdx=0, hls=null;
+const app=document.getElementById('app');
+
+const store={
+  k:(n)=>'vp_'+n,
+  save(n,t){try{localStorage.setItem(this.k(n),t);}catch(e){}},
+  get(n){try{return parseFloat(localStorage.getItem(this.k(n))||0);}catch(e){return 0;}}
+};
+
+async function loadData(){
+  try{
+    const r=await fetch('data.json?t='+Date.now());
+    DATA=await r.json();
+  }catch(e){ DATA={shows:[]}; }
+}
+
+function parseHash(){
+  // #/play/片名/36 或 #/
+  const h=location.hash.slice(2);
+  if(!h) return {view:'home'};
+  const parts=h.split('/');
+  if(parts[0]==='play'){
+    return {view:'play', name:decodeURIComponent(parts[1]||''), ep:parts[2]!==undefined?parseInt(parts[2]):null};
+  }
+  return {view:'home'};
+}
+
+function renderHome(){
+  const shows=DATA.shows||[];
+  let h='<div class="home-head">Freeme · 片库（'+shows.length+'部）</div>';
+  if(!shows.length){ app.innerHTML=h+'<div class="empty">片库为空</div>'; return; }
+  h+='<div class="grid">';
+  shows.forEach((s,i)=>{
+    h+=`<div class="card" data-i="${i}"><img loading="lazy" src="${s.pic||''}" onerror="this.style.visibility='hidden'"><div class="cap"><div class="n">${s.name}</div><div class="r">${s.remarks||''}</div></div></div>`;
+  });
+  h+='</div>';
+  app.innerHTML=h;
+  app.querySelectorAll('.card').forEach(c=>{
+    c.onclick=()=>{ location.hash='#/play/'+encodeURIComponent(shows[c.dataset.i].name)+'/0'; };
+  });
+}
+
+function findShow(name){
+  return (DATA.shows||[]).find(s=>s.name===name);
+}
+
+function renderPlay(route){
+  const s=findShow(route.name);
+  if(!s){ app.innerHTML='<div class="empty">未找到该片，<a class="back" href="#/">返回片库</a></div>'; return; }
+  lineIdx=0;
+  epIdx=route.ep!==null?Math.min(route.ep, s.lines[0].eps.length-1):0;
+  app.innerHTML=`
+    <a class="back" href="#/">← 返回片库</a>
+    <div class="player-box"><video id="video" playsinline controls></video></div>
+    <div class="meta">
+      <img src="${s.pic||''}" onerror="this.style.visibility='hidden'">
+      <div><h1>${s.name}</h1><div class="sub">${s.remarks||''}</div></div>
+    </div>
+    <div class="panel">
+      <div class="toolbar">
+        <button id="btnPrev">上一集</button>
+        <button id="btnNext">下一集</button>
+        <span class="hint" id="nowPlaying"></span>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="eps" id="eps"></div>
+    </div>`;
+  drawPlay(s);
+}
+
+function drawPlay(s){
+  const tabs=document.getElementById('tabs');
+  tabs.innerHTML='';
+  s.lines.forEach((l,i)=>{
+    const d=document.createElement('div');
+    d.className='tab'+(i===lineIdx?' active':'');
+    d.textContent=l.name+' ('+l.eps.length+')';
+    d.onclick=()=>{
+      const old=s.lines[lineIdx].eps[epIdx]?.name;
+      lineIdx=i;
+      let ni=old?s.lines[i].eps.findIndex(e=>e.name===old):-1;
+      epIdx=ni>=0?ni:Math.min(epIdx,s.lines[i].eps.length-1);
+      drawPlay(s);
+    };
+    tabs.appendChild(d);
+  });
+  const box=document.getElementById('eps');
+  box.innerHTML='';
+  s.lines[lineIdx].eps.forEach((e,i)=>{
+    const d=document.createElement('div');
+    d.className='ep'+(i===epIdx?' active':'');
+    d.textContent=e.name;
+    d.onclick=()=>{ epIdx=i; playEp(s); };
+    box.appendChild(d);
+  });
+  document.getElementById('nowPlaying').textContent=s.lines[lineIdx].name+' · '+s.lines[lineIdx].eps[epIdx].name;
+  document.getElementById('btnPrev').onclick=()=>{ if(epIdx>0){epIdx--; playEp(s);} };
+  document.getElementById('btnNext').onclick=()=>{ if(epIdx<s.lines[lineIdx].eps.length-1){epIdx++; playEp(s);} };
+  playEp(s);
+}
+
+function playEp(s){
+  const ep=s.lines[lineIdx].eps[epIdx];
+  location.hash='#/play/'+encodeURIComponent(s.name)+'/'+epIdx;
+  document.querySelectorAll('.ep').forEach((d,i)=>d.className='ep'+(i===epIdx?' active':''));
+  document.getElementById('nowPlaying').textContent=s.lines[lineIdx].name+' · '+ep.name;
+  const video=document.getElementById('video');
+  if(hls){hls.destroy();hls=null;}
+  if(video.canPlayType('application/vnd.apple.mpegurl')){
+    video.src=ep.url;
+  }else if(window.Hls&&Hls.isSupported()){
+    hls=new Hls({maxBufferLength:30});
+    hls.loadSource(ep.url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR,(_e,d)=>{
+      if(d.fatal){ hls.startLoad?.(); }
+    });
+  }
+  video.currentTime=store.get(s.name+'|'+ep.name)||0;
+  video.play().catch(()=>{});
+  video.ontimeupdate=()=>{
+    if(video.duration&&video.currentTime<video.duration-3)
+      store.save(s.name+'|'+ep.name,video.currentTime);
+  };
+  video.onended=()=>{
+    if(epIdx<s.lines[lineIdx].eps.length-1){epIdx++; playEp(s);}
+  };
+}
+
+async function route(){
+  if(!DATA) await loadData();
+  const r=parseHash();
+  if(r.view==='home') renderHome();
+  else renderPlay(r);
+}
+window.addEventListener('hashchange',route);
+route();
+</script>
+</body>
+</html>
